@@ -21,6 +21,7 @@ use tonic::{codegen::InterceptedService, transport::Channel, Code};
 
 use crate::{
     forwarder::ShredMetrics,
+    shutdown_has_passed,
     token_authenticator::{create_grpc_channel, ClientInterceptor},
     ShredstreamProxyError,
 };
@@ -82,7 +83,11 @@ pub fn heartbeat_loop_thread(
         let mut successful_heartbeat_count_cumulative = 0u64;
         let mut failed_heartbeat_count_cumulative = 0u64;
 
-        while !exit.load(Ordering::Relaxed) {
+        'heartbeat_loop: while !exit.load(Ordering::Relaxed) {
+            if shutdown_has_passed() {
+                warn!("ShredStream has been shut down");
+                break;
+            }
             // We want to scope the grpc shredstream client to the heartbeat loop. This way shredstream client exits when the heartbeat loop exits
             let per_con_exit = ScopedAtomicBool::default();
             info!("Starting heartbeat client");
@@ -112,6 +117,10 @@ pub fn heartbeat_loop_thread(
                 }
             };
             while !exit.load(Ordering::Relaxed) {
+                if shutdown_has_passed() {
+                    warn!("ShredStream has been shut down");
+                    break 'heartbeat_loop;
+                }
                 crossbeam_channel::select! {
                     // send heartbeat
                     recv(heartbeat_tick) -> _ => {
